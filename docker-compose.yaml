@@ -1,55 +1,104 @@
-version: "3.7"
+version: '3.8'
 
 services:
+  # PostgreSQL
   postgres:
-    image: postgres:13-alpine
+    image: postgres:13
     environment:
-      POSTGRES_USER: fpluser
-      POSTGRES_PASSWORD: fplpassword
-      POSTGRES_DB: fpl_db
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    volumes:
-      - fpl-postgres-data:/var/lib/postgresql/data
 
-  minio:
-    image: minio/minio
+  # pgAdmin
+  pgadmin:
+    image: dpage/pgadmin4
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: miniopassword
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
     ports:
-      - "9000:9000"  # MinIO web UI
-      - "9001:9001"  # MinIO API
-    volumes:
-      - fpl-minio-data:/data
-
-
-  airflow:
-    image: apache/airflow:2.4.0
+      - "8080:80"
     depends_on:
       - postgres
-      - minio
-    ports:
-      - "8080:8080"
+
+  # Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
     environment:
-      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql://fpluser:fplpassword@postgres:5432/airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  # Kafdrop
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: kafka:9092
+    depends_on:
+      - kafka
+
+  # Custom Airflow service with the wait-for-it.sh script
+  airflow:
+    build:
+      context: .  # Build from current directory
+      dockerfile: Dockerfile  # Specify the custom Dockerfile
+    environment:
+      LOAD_EX: "n"
+      EXECUTOR: "LocalExecutor"
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "8081:8080"
     volumes:
-      - ./dags:/opt/airflow/dags
-      - ./dbt_project:/opt/airflow/dbt_project
-    command: > 
-      bash -c "
-        airflow db init &&
-        airflow users create \
-          --username admin \
-          --firstname Airflow \
-          --lastname Admin \
-          --role Admin \
-          --email admin@example.com \
-          --password admin &&
-        airflow webserver --port 8080 -D &
-        airflow scheduler -D 
-      "
+      - ./dags:/usr/local/airflow/dags
+      - ./logs:/usr/local/airflow/logs
+      - ./plugins:/usr/local/airflow/plugins
+    depends_on:
+      - postgres
+    entrypoint: /usr/local/airflow/wait-for-it.sh postgres:5432 -- /usr/local/bin/airflow webserver
+
+  # Spark
+  spark:
+    image: bitnami/spark:latest
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7077:7077"
+      - "8082:8080"
+
+  # Spark Worker
+  spark-worker:
+    image: bitnami/spark:latest
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark:7077
+    depends_on:
+      - spark
+
+  # Metabase
+  metabase:
+    image: metabase/metabase
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+
 volumes:
-  fpl-postgres-data:
-  fpl-minio-data:
+  postgres_data:
+    driver: local
