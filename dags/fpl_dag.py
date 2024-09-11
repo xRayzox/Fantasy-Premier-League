@@ -1,9 +1,9 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.providers.apache.kafka.operators.produce import ProduceToTopicOperator
 from datetime import datetime, timedelta
 import json
 import sys
+from confluent_kafka import Producer
 
 # Add the path to your functions file (adjust if needed)
 sys.path.append('/opt/airflow/fpl_functions')
@@ -25,17 +25,28 @@ default_args = {
 }
 
 dag = DAG(
-    'fpl_data_pipeline',  
+    'fpl_data_pipeline',
     default_args=default_args,
-    description='1-FPL Data Pipeline with Kafka and Spark',
+    description='1-FPL Data Pipeline with Confluent Kafka and Spark',
     schedule_interval=timedelta(days=1),  # Run daily, adjust as needed
     catchup=False
 )
 
+# --- Kafka Producer Configuration ---
+
+def create_kafka_producer():
+    """Creates a Kafka producer instance."""
+    return Producer({
+        'bootstrap.servers': 'kafka_broker_1:9092',  # Update with your Kafka brokers
+        'client.id': 'airflow_producer'
+    })
+
 # --- Kafka Producer Function --- 
-def producer_function(messages):
-    """Prepares messages for Kafka by serializing them to JSON format and encoding to bytes."""
-    return [json.dumps(message).encode('utf-8') for message in messages]
+def producer_function(producer, topic, messages):
+    """Sends messages to Kafka topic using the provided producer."""
+    for message in messages:
+        producer.produce(topic, key=None, value=json.dumps(message))
+    producer.flush()
 
 # --- Data Fetching Tasks ---
 
@@ -90,50 +101,55 @@ fetch_live_event_data_task = PythonOperator(
     dag=dag
 )
 
-# --- ProduceToTopicOperator Tasks for Sending to Kafka ---
+# --- PythonOperator Tasks for Sending to Kafka --- 
 
-produce_players_task = ProduceToTopicOperator(
+produce_players_task = PythonOperator(
     task_id='produce_players_to_kafka',
-    topic='fpl_player_data',
-    kafka_conn_id='kafka_default',  # Make sure this matches the connection ID in Airflow UI
-    producer_function=producer_function,  # Use the correct producer function here
-    data="{{ ti.xcom_pull(task_ids='fetch_players') }}",  # Pull the data from the XCom
+    python_callable=lambda: producer_function(
+        create_kafka_producer(),
+        'fpl_player_data',
+        fetch_players()
+    ),
     dag=dag
 )
 
-produce_teams_task = ProduceToTopicOperator(
+produce_teams_task = PythonOperator(
     task_id='produce_teams_to_kafka',
-    topic='fpl_team_data',
-    kafka_conn_id='kafka_default',
-    producer_function=producer_function,
-    data="{{ ti.xcom_pull(task_ids='fetch_teams') }}",
+    python_callable=lambda: producer_function(
+        create_kafka_producer(),
+        'fpl_team_data',
+        fetch_teams()
+    ),
     dag=dag
 )
 
-produce_fixtures_task = ProduceToTopicOperator(
+produce_fixtures_task = PythonOperator(
     task_id='produce_fixtures_to_kafka',
-    topic='fpl_fixture_data',
-    kafka_conn_id='kafka_default',
-    producer_function=producer_function,
-    data="{{ ti.xcom_pull(task_ids='fetch_fixtures') }}",
+    python_callable=lambda: producer_function(
+        create_kafka_producer(),
+        'fpl_fixture_data',
+        fetch_fixtures()
+    ),
     dag=dag
 )
 
-produce_events_task = ProduceToTopicOperator(
+produce_events_task = PythonOperator(
     task_id='produce_events_to_kafka',
-    topic='fpl_event_data',
-    kafka_conn_id='kafka_default',
-    producer_function=producer_function,
-    data="{{ ti.xcom_pull(task_ids='fetch_events') }}",
+    python_callable=lambda: producer_function(
+        create_kafka_producer(),
+        'fpl_event_data',
+        fetch_events()
+    ),
     dag=dag
 )
 
-produce_live_event_data_task = ProduceToTopicOperator(
+produce_live_event_data_task = PythonOperator(
     task_id='produce_live_event_data_to_kafka',
-    topic='fpl_live_event_data',
-    kafka_conn_id='kafka_default',
-    producer_function=producer_function,
-    data="{{ ti.xcom_pull(task_ids='fetch_live_event_data') }}",
+    python_callable=lambda: producer_function(
+        create_kafka_producer(),
+        'fpl_live_event_data',
+        fetch_live_event_data()
+    ),
     dag=dag
 )
 
