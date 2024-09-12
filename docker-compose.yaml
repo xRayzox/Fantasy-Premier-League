@@ -1,249 +1,58 @@
-x-airflow-common:
-  &airflow-common
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.10.1}
-  environment:
-    &airflow-common-env
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CORE__FERNET_KEY: ''
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
-    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
-  volumes:
-    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
-    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
-    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
-    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ${AIRFLOW_PROJ_DIR:-.}/FPL:/opt/airflow/fpl_functions
-  user: "${AIRFLOW_UID:-50000}:0"
-  depends_on:
-    &airflow-common-depends-on
-    postgres:
-      condition: service_healthy
-services:
+services : 
+######################################################
+# AIRFLOW
+######################################################
+
+  airflow:
+    build: ./Docker/airflow
+    restart: always
+    container_name: airflow
+    volumes:
+      - ./mnt/airflow/dags:/opt/airflow/dags
+      - ./mnt/airflow/spark:/opt/airflow/spark
+      - ./mnt/airflow/plugins:/opt/airflow/plugins
+      - ./mnt/airflow/kafka:/opt/airflow/kafka
+    ports:
+      - 8080:8080
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "airflow", "8080" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+    networks:
+      - bigdata-network
+######################################################
+# DATABASE SERVICE
+######################################################
   postgres:
     image: postgres:13
-    environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+    restart: always
+    container_name: postgres
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
     ports:
-      - "5432:5432"
-    volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
+      - 5432:5432
+    #volumes:
+      #- ./mnt/postgres:/var/lib/postgresql/data/pgdata
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow_db
+      #- PGDATA=/var/lib/postgresql/data/pgdata
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: [ "CMD", "pg_isready", "-q", "-d", "airflow_db", "-U", "airflow" ]
+      timeout: 45s
       interval: 10s
-      retries: 5
-      start_period: 5s
-    restart: always
-
-  
-  airflow-webserver:
-    <<: *airflow-common
-    command: webserver
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-scheduler:
-    <<: *airflow-common
-    command: scheduler
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-triggerer:
-    <<: *airflow-common
-    command: triggerer
-    healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-init:
-    <<: *airflow-common
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - |
-        mkdir -p /sources/logs /sources/dags /sources/plugins
-        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
-        su airflow -s /bin/bash -c "pip install --no-cache-dir 'apache-airflow[celery,postgres,ssh]'  ${_PIP_ADDITIONAL_REQUIREMENTS}" 
-        exec /entrypoint airflow version
-    environment:
-      <<: *airflow-common-env
-      _AIRFLOW_DB_MIGRATE: 'true'
-      _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
-      _PIP_ADDITIONAL_REQUIREMENTS: '' # Needs to be empty here
-    user: "0:0"
-    volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}:/sources
-
-  airflow-cli:
-    <<: *airflow-common
-    profiles:
-      - debug
-    environment:
-      <<: *airflow-common-env
-      CONNECTION_CHECK_MAX_COUNT: "0"
-    command:
-      - bash
-      - -c
-      - airflow
-
-  # Zookeeper for Kafka
-  kafka_zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    ports:
-      - "2181:2181"
-    environment:
-      - ZOOKEEPER_CLIENT_PORT=${ZOOKEEPER_CLIENT_PORT}
-      - ZOOKEEPER_SERVER_ID=${ZOOKEEPER_SERVER_ID}
-      - ZOOKEEPER_SERVERS=kafka_zookeeper:2888:3888
+      retries: 10
     networks:
-      - kafka_network
+      - bigdata-network
 
-  # Kafka Broker Instances
-  kafka_broker_1:
-    extends:
-      service: kafka_base
-    environment:
-      - KAFKA_BROKER_ID=1
-      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka_broker_1:19092,EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9092,DOCKER://host.docker.internal:29092
-
-  kafka_broker_2:
-    extends:
-      service: kafka_base
-    environment:
-      - KAFKA_BROKER_ID=2
-      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka_broker_2:19093,EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9093,DOCKER://host.docker.internal:29093
-
-  kafka_broker_3:
-    extends:
-      service: kafka_base
-    environment:
-      - KAFKA_BROKER_ID=3
-      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka_broker_3:19094,EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9094,DOCKER://host.docker.internal:29094
-
-  kafka_base:
-    image: confluentinc/cp-kafka:latest
-    environment:
-      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=${KAFKA_LISTENER_SECURITY_PROTOCOL_MAP}
-      - KAFKA_INTER_BROKER_LISTENER_NAME=${KAFKA_INTER_BROKER_LISTENER_NAME}
-      - KAFKA_ZOOKEEPER_CONNECT=kafka_zookeeper:2181
-      - KAFKA_LOG4J_LOGGERS=${KAFKA_LOG4J_LOGGERS}
-      - KAFKA_AUTHORIZER_CLASS_NAME=${KAFKA_AUTHORIZER_CLASS_NAME}
-      - KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=${KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND}
-    networks:
-      - kafka_network
-  # Kafka Connect
-  kafka_connect:
-    image: confluentinc/cp-kafka-connect:latest
-    ports:
-      - "8083:8083"
-    environment:
-      - CONNECT_BOOTSTRAP_SERVERS=${CONNECT_BOOTSTRAP_SERVERS}
-      - CONNECT_REST_PORT=${CONNECT_REST_PORT}
-      - CONNECT_GROUP_ID=${CONNECT_GROUP_ID}
-      - CONNECT_CONFIG_STORAGE_TOPIC=${CONNECT_CONFIG_STORAGE_TOPIC}
-      - CONNECT_OFFSET_STORAGE_TOPIC=${CONNECT_OFFSET_STORAGE_TOPIC}
-      - CONNECT_STATUS_STORAGE_TOPIC=${CONNECT_STATUS_STORAGE_TOPIC}
-      - CONNECT_KEY_CONVERTER=${CONNECT_KEY_CONVERTER}
-      - CONNECT_VALUE_CONVERTER=${CONNECT_VALUE_CONVERTER}
-      - CONNECT_INTERNAL_KEY_CONVERTER=${CONNECT_INTERNAL_KEY_CONVERTER}
-      - CONNECT_INTERNAL_VALUE_CONVERTER=${CONNECT_INTERNAL_VALUE_CONVERTER}
-      - CONNECT_REST_ADVERTISED_HOST_NAME=${CONNECT_REST_ADVERTISED_HOST_NAME}
-      - CONNECT_LOG4J_ROOT_LOGLEVEL=${CONNECT_LOG4J_ROOT_LOGLEVEL}
-      - CONNECT_LOG4J_LOGGERS=${CONNECT_LOG4J_LOGGERS}
-      - CONNECT_PLUGIN_PATH=${CONNECT_PLUGIN_PATH}
-    networks:
-      - kafka_network
-
-  # Kafka Schema Registry
-  kafka_schema_registry:
-    image: confluentinc/cp-schema-registry:latest
-    ports:
-      - "8081:8081"
-    environment:
-      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=${SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS}
-      - SCHEMA_REGISTRY_HOST_NAME=${SCHEMA_REGISTRY_HOST_NAME}
-      - SCHEMA_REGISTRY_LISTENERS=${SCHEMA_REGISTRY_LISTENERS}
-    networks:
-      - kafka_network
-
-  # Kafka User Interface
-  kafka_ui:
-    container_name: kafka-ui-1
-    image: provectuslabs/kafka-ui:latest
-    ports:
-      - 8888:8080
-    depends_on:
-      - kafka_broker_1
-      - kafka_broker_2
-      - kafka_broker_3
-      - kafka_schema_registry
-      - kafka_connect
-    environment:
-      - KAFKA_CLUSTERS_0_NAME=${KAFKA_CLUSTERS_0_NAME}
-      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=${KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS}
-      - KAFKA_CLUSTERS_0_SCHEMAREGISTRY=${KAFKA_CLUSTERS_0_SCHEMAREGISTRY}
-      - KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME=${KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME}
-      - KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS=${KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS}
-      - DYNAMIC_CONFIG_ENABLED=${DYNAMIC_CONFIG_ENABLED}
-
-    networks:
-      - kafka_network
-  # Apache Spark Master Node
-  spark_master:
-    image: bitnami/spark:3
-    container_name: spark_master
-    ports:
-      - 8085:8080
-    environment:
-      - SPARK_UI_PORT=${SPARK_UI_PORT}
-      - SPARK_MODE=${SPARK_MODE}
-      - SPARK_RPC_AUTHENTICATION_ENABLED=${SPARK_RPC_AUTHENTICATION_ENABLED}
-      - SPARK_RPC_ENCRYPTION_ENABLED=${SPARK_RPC_ENCRYPTION_ENABLED}
-    volumes:
-      - ./:/home
-      - spark_data:/opt/bitnami/spark/data
-    networks:
-      - kafka_network
-
-volumes:
-  postgres-db-volume:
-  spark_data:
-
+######################################################
+# NETWORK
+######################################################
 networks:
-  kafka_network:
+  bigdata-network:
     driver: bridge
