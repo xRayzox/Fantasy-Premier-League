@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add the path to your functions file (adjust if needed)
 sys.path.append('/opt/airflow/fpl_functions')
-from Functions import get_fpl_data, get_fixtures_data, get_player_history
+from Functions import get_fpl_data, get_fixtures_data, get_players_history
 
 # Set default arguments
 default_args = {
@@ -22,7 +22,7 @@ default_args = {
 
 # Initialize the DAG
 dag = DAG(
-    '3-fpl_data_pipeline_with_kafka',
+    '7-fpl_data_pipeline_with_kafka',
     default_args=default_args,
     description='FPL Data Pipeline with Confluent Kafka',
     schedule_interval=timedelta(days=1),  # Adjust as needed
@@ -40,7 +40,7 @@ def create_producer():
     return Producer(conf)
 
 # Function to produce data to Kafka topic
-def produce_to_kafka(topic, data):
+def produce_to_kafka(topic, data,key_id):
     producer = create_producer()
     
     def delivery_report(err, msg):
@@ -51,10 +51,7 @@ def produce_to_kafka(topic, data):
 
     seen_keys = set()
     for item in data:
-        key = str(item.get('id', ''))
-        if key in seen_keys:
-            print(f"Duplicate record found for key: {key}")
-            continue
+        key = str(item.get(key_id, ''))
         seen_keys.add(key)
 
         value = json.dumps(item).encode('utf-8')
@@ -80,48 +77,31 @@ def fetch_fpl_data():
 # Task 2: Fetch and produce teams
 def fetch_and_produce_teams(**kwargs):
     teams_data = kwargs['task_instance'].xcom_pull(task_ids='fetch_fpl_data')['teams_data']
-    produce_to_kafka("FPL_Teams", teams_data)
+    produce_to_kafka("FPL_Teams", teams_data,"id")
 
 # Task 3: Fetch and produce players
 def fetch_and_produce_players(**kwargs):
     players_data = kwargs['task_instance'].xcom_pull(task_ids='fetch_fpl_data')['players_data']
-    produce_to_kafka("FPL_Players", players_data)
+    produce_to_kafka("FPL_Players", players_data,"id")
 
 # Task 4: Fetch and produce gameweeks
 def fetch_and_produce_gameweeks(**kwargs):
     gameweeks_data = kwargs['task_instance'].xcom_pull(task_ids='fetch_fpl_data')['gameweeks_data']
-    produce_to_kafka("FPL_Gameweeks", gameweeks_data)
+    produce_to_kafka("FPL_Gameweeks", gameweeks_data,"id")
 
 # Task 5: Fetch and produce fixtures data
 def fetch_and_produce_fixtures():
     fixtures_data = get_fixtures_data()
-    produce_to_kafka("FPL_Fixtures", fixtures_data)
+    produce_to_kafka("FPL_Fixtures", fixtures_data,"id")
 
-# Task 6: Fetch player history data in parallel and produce it
+
 # Task 6: Fetch player history data in parallel and produce it
 def fetch_and_produce_player_history(**kwargs):
     # Fetch only player IDs from XCom
     players_data = kwargs['task_instance'].xcom_pull(task_ids='fetch_fpl_data')['players_data']
     player_ids = [player['id'] for player in players_data]
-    
-    # Create a thread pool to fetch player history data in parallel
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(get_player_history, player_id): player_id for player_id in player_ids}
-
-        for future in as_completed(futures):
-            player_id = futures[future]
-            try:
-                # Get the player history result
-                player_history = future.result()
-                if "history" in player_history:
-                    history_list = player_history['history']
-                    
-                    # Produce each fixture history individually to Kafka
-                    for fixture_data in history_list:
-                        produce_to_kafka("FPL_PlayerHistory", [fixture_data])
-            except Exception as exc:
-                print(f"Error fetching history for player {player_id}: {exc}")
-
+    players_history=get_players_history(player_ids)
+    produce_to_kafka("FPL_PlayerHistory", players_history,"element")
 # Define PythonOperator tasks
 fetch_fpl_data_task = PythonOperator(
     task_id='fetch_fpl_data',
@@ -139,14 +119,12 @@ fetch_and_produce_teams_task = PythonOperator(
 fetch_and_produce_players_task = PythonOperator(
     task_id='fetch_and_produce_players',
     python_callable=fetch_and_produce_players,
-    provide_context=True,
     dag=dag,
 )
 
 fetch_and_produce_gameweeks_task = PythonOperator(
     task_id='fetch_and_produce_gameweeks',
     python_callable=fetch_and_produce_gameweeks,
-    provide_context=True,
     dag=dag,
 )
 
@@ -159,7 +137,6 @@ fetch_and_produce_fixtures_task = PythonOperator(
 fetch_and_produce_player_history_task = PythonOperator(
     task_id='fetch_and_produce_player_history',
     python_callable=fetch_and_produce_player_history,
-    provide_context=True,
     dag=dag,
 )
 
