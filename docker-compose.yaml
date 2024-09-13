@@ -1,27 +1,5 @@
 services : 
 ######################################################
-# AIRFLOW
-######################################################
-
-  airflow:
-    build: ./Docker/airflow
-    restart: always
-    container_name: airflow
-    volumes:
-      - ./mnt/airflow/dags:/opt/airflow/dags
-      - ./mnt/airflow/spark:/opt/airflow/spark
-      - ./mnt/airflow/plugins:/opt/airflow/plugins
-      - ./mnt/airflow/kafka:/opt/airflow/kafka
-    ports:
-      - 8080:8080
-    healthcheck:
-      test: [ "CMD", "nc", "-z", "airflow", "8080" ]
-      timeout: 45s
-      interval: 10s
-      retries: 10
-    networks:
-      - bigdata-network
-######################################################
 # DATABASE SERVICE
 ######################################################
   postgres:
@@ -31,19 +9,37 @@ services :
     logging:
       driver: "json-file"
       options:
-          max-file: "5"
-          max-size: "10m"
+        max-file: "5"
+        max-size: "10m"
     ports:
       - 5432:5432
-    #volumes:
-      #- ./mnt/postgres:/var/lib/postgresql/data/pgdata
     environment:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
       - POSTGRES_DB=airflow_db
-      #- PGDATA=/var/lib/postgresql/data/pgdata
     healthcheck:
-      test: [ "CMD", "pg_isready", "-q", "-d", "airflow_db", "-U", "airflow" ]
+      test: ["CMD", "pg_isready", "-q", "-d", "airflow_db", "-U", "airflow"]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+    networks:
+      - bigdata-network
+######################################################
+# AIRFLOW
+######################################################
+
+  airflow:
+    build: ./docker/airflow
+    restart: always
+    container_name: airflow
+    volumes:
+      - ./mnt/airflow/dags:/opt/airflow/dags
+      - ./mnt/airflow/logs:/opt/airflow/spark
+      - ./mnt/airflow/plugins:/opt/airflow/plugins
+    ports:
+      - 8080:8080
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "airflow", "8080" ]
       timeout: 45s
       interval: 10s
       retries: 10
@@ -51,8 +47,46 @@ services :
       - bigdata-network
 
 ######################################################
+# KAFKA
+######################################################
+
+  kafka:
+    image: docker.io/bitnami/kafka:3.6
+    restart: always
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - 9092:9092
+      - 9093:9093
+    environment:
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+    networks:
+      - bigdata-network
+
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - 8089:8080
+    environment:
+      KAFKA_CLUSTERS_0_NAME: kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    networks:
+      - bigdata-network
+    restart: on-failure
+
+######################################################
 # NETWORK
 ######################################################
 networks:
   bigdata-network:
-    driver: bridge
+    driver : bridge
