@@ -16,7 +16,13 @@ RUN pip install --upgrade pip
 
 # Switch to root user to modify file permissions
 USER root
+RUN apt-get update
+RUN apt install -y default-jdk
+RUN apt-get autoremove -yqq --purge
+RUN apt-get clean
+RUN rm -rf /var/lib/apt/lists/*
 
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 # Copy entrypoint script, set ownership, and make it executable
 COPY entrypoint.sh ${AIRFLOW_HOME}/entrypoint.sh
 RUN chown airflow: ${AIRFLOW_HOME}/entrypoint.sh && chmod +x ${AIRFLOW_HOME}/entrypoint.sh
@@ -25,7 +31,7 @@ RUN chown airflow: ${AIRFLOW_HOME}/entrypoint.sh && chmod +x ${AIRFLOW_HOME}/ent
 USER airflow
 
 # Install Airflow with the necessary extras and Python version constraints
-RUN pip install --no-cache-dir "apache-airflow[postgres,aws,kafka,celery]==${AIRFLOW_VERSION}" \
+RUN pip install --no-cache-dir "apache-airflow[postgres,aws,kafka,celery,spark]==${AIRFLOW_VERSION}" \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
     ${_PIP_ADDITIONAL_REQUIREMENTS}
 

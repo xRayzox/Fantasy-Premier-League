@@ -22,7 +22,7 @@ default_args = {
 
 # Initialize the DAG
 dag = DAG(
-    '7-fpl_data_pipeline_with_kafka',
+    '8-fpl_data_pipeline_with_kafka',
     default_args=default_args,
     description='FPL Data Pipeline with Confluent Kafka',
     schedule_interval=timedelta(days=1),  # Adjust as needed
