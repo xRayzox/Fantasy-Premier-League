@@ -36,6 +36,7 @@ services :
       - ./mnt/airflow/dags:/opt/airflow/dags
       - ./mnt/airflow/logs:/opt/airflow/spark
       - ./mnt/airflow/plugins:/opt/airflow/plugins
+      - ./FPL:/opt/airflow/fpl_functions
     ports:
       - 8080:8080
     healthcheck:
