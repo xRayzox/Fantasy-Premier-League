@@ -1,67 +1,69 @@
 import requests
 import json
-import os 
 
-from bs4 import BeautifulSoup
+# Base URLs for the FPL API
+BASE_URL = "https://fantasy.premierleague.com/api"
+BOOTSTRAP_STATIC_URL = f"{BASE_URL}/bootstrap-static/"
+FIXTURES_URL = f"{BASE_URL}/fixtures/"
+PLAYER_HISTORY_URL = f"{BASE_URL}/element-summary/{{player_id}}/"
 
-BASE_URL = "https://fantasy.premierleague.com/api/"
+# Function to get FPL Bootstrap Static Data (players, teams, gameweeks)
+def get_fpl_data():
+    response = requests.get(BOOTSTRAP_STATIC_URL)
+    if response.status_code == 200:
+        return response.json()  # Return JSON data
+    else:
+        response.raise_for_status()
 
-def get_fpl_api_data(url):
-    """Fetches data from the FPL API."""
+# Function to get FPL Fixtures Data
+def get_fixtures_data():
+    response = requests.get(FIXTURES_URL)
+    if response.status_code == 200:
+        return response.json()  # Return JSON data
+    else:
+        response.raise_for_status()
+
+# Function to get player history (only the 'history' list for a specific player)
+def get_player_history(player_id):
+    url = PLAYER_HISTORY_URL.format(player_id=player_id)
     response = requests.get(url)
-    response.raise_for_status()
-    return response.json()
+    if response.status_code == 200:
+        player_data = response.json()
+        return player_data.get('history', [])  # Return only the 'history' list
+    else:
+        response.raise_for_status()
 
-def save_data(data, filename, data_type="api"):
-    """Saves data to a file (JSON)."""
-    filepath = os.path.join('data/raw', filename)
-    with open(filepath, 'w') as f:
-        json.dump(data, f, indent=4)
+# Fetch all data as JSON
+def fetch_fpl_data():
+    # Fetch bootstrap-static data (players, teams, gameweeks)
+    data = get_fpl_data()
 
-def get_bootstrap_static():
-    
-    url = BASE_URL + "bootstrap-static/"
-    data = get_fpl_api_data(url)
-    #save_data(data, 'bootstrap_static.json')
-    return data
+    # Extract Players, Teams, and Gameweeks
+    players_data = data['elements']
+    teams_data = data['teams']
+    gameweeks_data = data['events']
 
-def get_player_summary(player_id):
-    """Retrieves player summary data for a given player ID."""
-    url = f"{BASE_URL}element-summary/{player_id}/"
-    data = get_fpl_api_data(url)
-    #save_data(data, f'player_summary/{player_id}.json')
-    return data
+    # Fetch fixtures data
+    fixtures_data = get_fixtures_data()
 
-def get_event_live(event_id):
-    """Retrieves live data for a specific gameweek (event)."""
-    url = f"{BASE_URL}event/{event_id}/live/"
-    data = get_fpl_api_data(url)
-    #save_data(data, f'events/event_{event_id}_live.json')
-    return data
+    # Fetch Player History for all players
+    player_history_data = {}
+    for player in players_data:  # Loop through all players
+        player_id = player['id']
+        player_history = get_player_history(player_id)
+        player_history_data[player_id] = player_history  # Store only the history list
 
-def get_teams():
-    bootstrap_data = get_bootstrap_static() 
-    teams_data = bootstrap_data.get('teams', []) # Extract teams list
-    #save_data(teams_data, 'teams.json')
-    return teams_data
+    # Store all fetched data in a dictionary
+    fpl_data = {
+        'players': players_data,
+        'teams': teams_data,
+        'gameweeks': gameweeks_data,
+        'fixtures': fixtures_data,
+        'player_history': player_history_data,
+    }
 
-def get_fixtures():
-    """Retrieves fixture data from bootstrap-static."""
-    bootstrap_data = get_bootstrap_static()
-    fixtures_data = bootstrap_data.get('events', []) # Extract fixtures list
-    #save_data(fixtures_data, 'fixtures.json')
-    return fixtures_data
+    # Return the full FPL data as JSON
+    return fpl_data
 
-def get_players():
-    """Retrieves player data from bootstrap-static."""
-    bootstrap_data = get_bootstrap_static()
-    players_data = bootstrap_data.get('elements', [])
-    #save_data(players_data, 'players.json')
-    return players_data
 
-def get_events():
-    """Retrieves event (gameweek) data from bootstrap-static."""
-    bootstrap_data = get_bootstrap_static()
-    events_data = bootstrap_data.get('events', [])
-   #save_data(events_data, 'events.json')
-    return events_data
+
