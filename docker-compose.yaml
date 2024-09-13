@@ -50,9 +50,8 @@ services :
 ######################################################
 # KAFKA
 ######################################################
-
   kafka:
-    image: docker.io/bitnami/kafka:3.6
+    image: docker.io/bitnami/kafka:latest
     restart: always
     container_name: kafka
     hostname: kafka
@@ -84,7 +83,33 @@ services :
     networks:
       - bigdata-network
     restart: on-failure
+######################################################
+  # SPARK
+######################################################
+  spark-master:
+    image: bitnami/spark:latest
+    ports:
+      - "8081:8080"  # Spark Master UI
+      - "7077:7077"  # Spark Master port
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+    networks:
+      - bigdata-network
 
+  spark-worker:
+    image: bitnami/spark:latest
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 1g # Adjust if needed
+    networks:
+      - bigdata-network
 ######################################################
 # NETWORK
 ######################################################

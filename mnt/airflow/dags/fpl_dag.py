@@ -1,10 +1,10 @@
 from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.operators.python_operator import PythonOperator
 from datetime import datetime, timedelta
-import json
-import sys
 from confluent_kafka import Producer
-
+import json
+import time
+import sys
 # Add the path to your functions file (adjust if needed)
 sys.path.append('/opt/airflow/fpl_functions')
 from Functions import (
@@ -12,151 +12,78 @@ from Functions import (
     get_event_live 
 )
 
-# --- Airflow DAG Configuration ---
-
+# Set default arguments
 default_args = {
-    'owner': 'your_name',
+    'owner': 'airflow',
     'depends_on_past': False,
-    'start_date': datetime(2023, 12, 21),  # Update as needed
-    'email': ['your_email@example.com'],  # Update with your email
-    'email_on_failure': True,
+    'email_on_failure': False,
+    'email_on_retry': False,
     'retries': 1,
-    'retry_delay': timedelta(minutes=5)
+    'retry_delay': timedelta(minutes=5),
 }
 
+# Initialize the DAG
 dag = DAG(
     'fpl_data_pipeline',
     default_args=default_args,
-    description='1-FPL Data Pipeline with Confluent Kafka and Spark',
-    schedule_interval=timedelta(days=1),  # Run daily, adjust as needed
-    catchup=False
+    description='FPL Data Pipeline with Confluent Kafka',
+    schedule_interval=timedelta(days=1),  # Adjust as needed
+    start_date=datetime(2023, 12, 21),
+    catchup=False,
 )
 
-# --- Kafka Producer Configuration ---
+# Define the function to run
+def produce_data_to_kafka():
+    kafka_topic_prefix = "FPL_"  # Prefix for different topics
+    kafka_bootstrap_servers = "kafka:9092"
 
-def create_kafka_producer():
-    """Creates a Kafka producer instance."""
-    return Producer({
-        'bootstrap.servers': 'kafka_broker_1:9092',  # Update with your Kafka brokers
-        'client.id': 'airflow_producer'
-    })
+    # Producer configuration
+    conf = {
+        'bootstrap.servers': kafka_bootstrap_servers,
+    }
 
-# --- Kafka Producer Function --- 
-def producer_function(producer, topic, messages):
-    """Sends messages to Kafka topic using the provided producer."""
-    for message in messages:
-        producer.produce(topic, key=None, value=json.dumps(message))
+    # Create a Producer instance
+    producer = Producer(conf)
+
+    def delivery_report(err, msg):
+        if err is not None:
+            print(f"Message delivery failed: {err}")
+        else:
+            print(f"Message delivered to {msg.topic()} [{msg.partition()}]")
+
+    # Dictionary of functions and their respective Kafka topics
+    functions_and_topics = {
+        'players': get_players,
+        'teams': get_teams,
+        'fixtures': get_fixtures,
+        'events': get_events,
+        'event_live': get_event_live
+    }
+
+    # Iterate over the functions and topics
+    for key, func in functions_and_topics.items():
+        data = func()
+        kafka_topic = f"{kafka_topic_prefix}{key.capitalize()}"
+        for item in data:
+            # Use the 'id' field as the key (adjust if necessary)
+            key = str(item.get('id', 'default_key'))
+            value = json.dumps(item).encode('utf-8')
+            producer.produce(kafka_topic, key=key, value=value, callback=delivery_report)
+            producer.poll(1)  # Wait up to 1 second for events to be processed
+            time.sleep(1)
+
+    # Ensure all messages are delivered before exiting
     producer.flush()
 
-# --- Data Fetching Tasks ---
 
-def fetch_players():
-    return get_players()
 
-def fetch_teams():
-    return get_teams()
-
-def fetch_fixtures():
-    return get_fixtures()
-
-def fetch_events():
-    return get_events()
-
-def fetch_live_event_data():
-    events = get_events()
-    current_gameweek = next((event['id'] for event in events if event['is_current']), None)
-    if current_gameweek:
-        return get_event_live(current_gameweek)
-    return None 
-
-# --- PythonOperator Tasks for Fetching Data ---
-
-fetch_players_task = PythonOperator(
-    task_id='fetch_players',
-    python_callable=fetch_players,
-    dag=dag
+# Define PythonOperator task for fetching teams data and producing to Kafka
+produce_data_task = PythonOperator(
+    task_id='produce_data_task',
+    python_callable=produce_data_to_kafka,
+    dag=dag,
 )
 
-fetch_teams_task = PythonOperator(
-    task_id='fetch_teams',
-    python_callable=fetch_teams,
-    dag=dag
-)
+# Set task dependencies if needed
+produce_data_task
 
-fetch_fixtures_task = PythonOperator(
-    task_id='fetch_fixtures',
-    python_callable=fetch_fixtures,
-    dag=dag
-)
-
-fetch_events_task = PythonOperator(
-    task_id='fetch_events',
-    python_callable=fetch_events,
-    dag=dag
-)
-
-fetch_live_event_data_task = PythonOperator(
-    task_id='fetch_live_event_data',
-    python_callable=fetch_live_event_data,
-    dag=dag
-)
-
-# --- PythonOperator Tasks for Sending to Kafka --- 
- 
-produce_players_task = PythonOperator(
-    task_id='produce_players_to_kafka',
-    python_callable=lambda: producer_function(
-        create_kafka_producer(),
-        'fpl_player_data',
-        fetch_players()
-    ),
-    dag=dag
-)
-
-produce_teams_task = PythonOperator(
-    task_id='produce_teams_to_kafka',
-    python_callable=lambda: producer_function(
-        create_kafka_producer(),
-        'fpl_team_data',
-        fetch_teams()
-    ),
-    dag=dag
-)
-
-produce_fixtures_task = PythonOperator(
-    task_id='produce_fixtures_to_kafka',
-    python_callable=lambda: producer_function(
-        create_kafka_producer(),
-        'fpl_fixture_data',
-        fetch_fixtures()
-    ),
-    dag=dag
-)
-
-produce_events_task = PythonOperator(
-    task_id='produce_events_to_kafka',
-    python_callable=lambda: producer_function(
-        create_kafka_producer(),
-        'fpl_event_data',
-        fetch_events()
-    ),
-    dag=dag
-)
-
-produce_live_event_data_task = PythonOperator(
-    task_id='produce_live_event_data_to_kafka',
-    python_callable=lambda: producer_function(
-        create_kafka_producer(),
-        'fpl_live_event_data',
-        fetch_live_event_data()
-    ),
-    dag=dag
-)
-
-# --- Task Dependencies ---
-
-fetch_players_task >> produce_players_task
-fetch_teams_task >> produce_teams_task
-fetch_fixtures_task >> produce_fixtures_task
-fetch_events_task >> produce_events_task
-fetch_live_event_data_task >> produce_live_event_data_task
