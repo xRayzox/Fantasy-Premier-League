@@ -1,172 +1,154 @@
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
-from datetime import datetime, timedelta
-from confluent_kafka import Producer
-import json
-import sys
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.utils.dates import days_ago
+import pandas as pd
+import sys
 
-# Add the path to your functions file (adjust if needed)
 sys.path.append('/opt/airflow/fpl_functions')
 from Functions import get_fpl_data, get_fixtures_data, get_players_history
 
-# Set default arguments
+def fetch_fpl_data(**kwargs):
+    """Fetches FPL data from the API and pushes it to XCom."""
+    data = get_fpl_data()
+    # Push the entire data to XCom
+    kwargs['ti'].xcom_push(key='fpl_data', value=data)
+    # Push player IDs to XCom for use in player history extraction
+    player_ids = [player['id'] for player in data['elements']]
+    kwargs['ti'].xcom_push(key='player_ids', value=player_ids)
+    return data
+
+def extract_and_load_players(**kwargs):
+    """Extracts player data from XCom."""
+    ti = kwargs['ti']
+    data = ti.xcom_pull(task_ids='fetch_fpl_data', key='fpl_data')
+    players_df = pd.DataFrame(data['elements'])  # Player data
+    return players_df
+
+def extract_and_load_teams(**kwargs):
+    """Extracts team data from XCom and pushes it as JSON to XCom."""
+    ti = kwargs['ti']
+    data = ti.xcom_pull(task_ids='fetch_fpl_data', key='fpl_data')
+    teams_df = pd.DataFrame(data['teams'])
+    
+    # Convert DataFrame to JSON string
+    teams_json = teams_df.to_json(orient='records')
+    
+    # Push JSON string to XCom
+    ti.xcom_push(key='teams_data_json', value=teams_json)
+    return teams_df
+
+def extract_and_load_events(**kwargs):
+    """Extracts gameweek data from XCom and pushes it as JSON to XCom."""
+    ti = kwargs['ti']
+    data = ti.xcom_pull(task_ids='fetch_fpl_data', key='fpl_data')
+    events_df = pd.DataFrame(data['events'])  # Gameweek data
+    
+    # Convert DataFrame to JSON string
+    events_json = events_df.to_json(orient='records')
+    
+    # Push JSON string to XCom
+    ti.xcom_push(key='events_data_json', value=events_json)
+    return events_df
+
+def extract_and_load_fixtures(**kwargs):
+    """Extracts fixtures data from the API."""
+    fixtures_data = get_fixtures_data()
+    fixtures_df = pd.DataFrame(fixtures_data)
+    return fixtures_df
+
+def extract_and_load_player_history(batch_size=50, **kwargs):
+    """Extracts player history data in chunks, using player IDs from XCom."""
+    ti = kwargs['ti']
+    player_ids = ti.xcom_pull(task_ids='fetch_fpl_data', key='player_ids')
+    all_player_history = []
+
+    for i in range(0, len(player_ids), batch_size):
+        batch_ids = player_ids[i:i + batch_size]
+        player_history = get_players_history(batch_ids)
+        all_player_history.extend(player_history)
+
+    history_df = pd.DataFrame(all_player_history)
+    return history_df
+
+# Default args for the Airflow DAG
 default_args = {
     'owner': 'airflow',
-    'depends_on_past': False,
-    'email_on_failure': False,
-    'email_on_retry': False,
+    'start_date': days_ago(1),
     'retries': 1,
-    'retry_delay': timedelta(minutes=5),
 }
 
-# Initialize the DAG
-dag = DAG(
-    '12-fpl_data_pipeline_with_kafka',
+# Define the Airflow DAG
+with DAG(
+    dag_id='fpl_data_pipeline',
     default_args=default_args,
-    description='FPL Data Pipeline with Confluent Kafka',
-    schedule_interval=timedelta(days=1),  # Adjust as needed
-    start_date=datetime(2023, 12, 21),
+    description='A DAG to extract and transform FPL data',
+    schedule_interval='@daily',  # Adjust frequency as needed
     catchup=False,
-)
+) as dag:
 
-# Kafka producer creation
-def create_producer():
-    kafka_bootstrap_servers = "kafka:9092"
-    conf = {
-        'bootstrap.servers': kafka_bootstrap_servers,
-        'enable.idempotence': True,
-    }
-    return Producer(conf)
+    # Task 1: Fetch FPL data
+    fetch_fpl_data_task = PythonOperator(
+        task_id='fetch_fpl_data',
+        python_callable=fetch_fpl_data,
+        provide_context=True
+    )
 
-# Function to produce data to Kafka topic
-def produce_to_kafka(topic, data, key_id):
-    producer = create_producer()
-    
-    def delivery_report(err, msg):
-        if err is not None:
-            print(f"Message delivery failed: {err}")
-        else:
-            print(f"Message delivered to {msg.topic()} [{msg.partition()}]")
+    # Task 2: Extract player data
+    extract_load_players_task = PythonOperator(
+        task_id='extract_and_load_players',
+        python_callable=extract_and_load_players,
+        provide_context=True,
+    )
 
-    seen_keys = set()
-    for item in data:
-        key = str(item.get(key_id, ''))
-        if key not in seen_keys:
-            seen_keys.add(key)
-            value = json.dumps(item).encode('utf-8')
-            producer.produce(topic, key=key, value=value, callback=delivery_report)
-            producer.poll(1)
+    # Task 3: Extract team data
+    extract_load_teams_task = PythonOperator(
+        task_id='extract_and_load_teams',
+        python_callable=extract_and_load_teams,
+        provide_context=True,
+    )
 
-    producer.flush()
+    # Task 4: Extract events data
+    extract_load_events_task = PythonOperator(
+        task_id='extract_and_load_events',
+        python_callable=extract_and_load_events,
+        provide_context=True,
+    )
 
-# Task 1: Fetch FPL data (players, teams, gameweeks)
-def fetch_fpl_data():
-    try:
-        # Fetch data from the FPL API
-        data = get_fpl_data()
-        
-        # Extract relevant sections
-        players_data = data['elements']
-        teams_data = data['teams']
-        gameweeks_data = data['events']
-        
-        # Prepare the data to be converted to JSON strings
-        return {
-            'players_data': players_data,
-            'teams_data': teams_data,
-            'gameweeks_data': gameweeks_data
-        }
-    except Exception as e:
-        print(f"Error fetching FPL data: {e}")
-        return {}
+    # Task 5: Extract fixtures data
+    extract_load_fixtures_task = PythonOperator(
+        task_id='extract_and_load_fixtures',
+        python_callable=extract_and_load_fixtures,
+        provide_context=True,
+    )
 
-# Task 2: Fetch and produce teams
-def fetch_and_produce_teams(**kwargs):
-    teams_data = get_fpl_data()['teams']
-    produce_to_kafka("FPL_Teams", teams_data, "id")
-    return json.dumps(teams_data, indent=4)
+    # Task 6: Extract player history data
+    extract_load_player_history_task = PythonOperator(
+        task_id='extract_and_load_player_history',
+        python_callable=extract_and_load_player_history,
+        provide_context=True,
+    )
 
-# Task 3: Fetch and produce players
-def fetch_and_produce_players(**kwargs):
-    players_data = kwargs['task_instance'].xcom_pull(task_ids='fetch_fpl_data')['players_data']
-    produce_to_kafka("FPL_Players", players_data, "id")
+    # Task 7: Transform teams data using Spark
+    transform_teams_task = SparkSubmitOperator(
+        task_id='transform_teams_data',
+        application='/opt/airflow/fpl_functions/teams_script.py',  # Path to your Spark script
+        conn_id='spark_conn',  # Airflow Spark connection ID
+        packages='org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0',
+        application_args=["{{ ti.xcom_pull(task_ids='extract_and_load_teams', key='teams_data_json') }}"],  # Pass JSON as argument
+        dag=dag
+    )
 
-# Task 4: Fetch and produce gameweeks
-def fetch_and_produce_gameweeks(**kwargs):
-    gameweeks_data = kwargs['task_instance'].xcom_pull(task_ids='fetch_fpl_data')['gameweeks_data']
-    produce_to_kafka("FPL_Gameweeks", gameweeks_data, "id")
-
-# Task 5: Fetch and produce fixtures data
-def fetch_and_produce_fixtures():
-    fixtures_data = get_fixtures_data()
-    produce_to_kafka("FPL_Fixtures", fixtures_data, "id")
-
-# Task 6: Fetch player history data in parallel and produce it
-def fetch_and_produce_player_history(**kwargs):
-    # Fetch only player IDs from XCom
-    players_data = kwargs['task_instance'].xcom_pull(task_ids='fetch_fpl_data')['players_data']
-    player_ids = [player['id'] for player in players_data]
-    player_history = get_players_history(player_ids)
-    produce_to_kafka("FPL_PlayerHistory", player_history, "element")
-
-# Define PythonOperator tasks
-fetch_fpl_data_task = PythonOperator(
-    task_id='fetch_fpl_data',
-    python_callable=fetch_fpl_data,
-    dag=dag,
-)
-
-fetch_and_produce_teams_task = PythonOperator(
-    task_id='fetch_and_produce_teams',
-    python_callable=fetch_and_produce_teams,
-    provide_context=True,
-    dag=dag,
-)
-
-fetch_and_produce_players_task = PythonOperator(
-    task_id='fetch_and_produce_players',
-    python_callable=fetch_and_produce_players,
-    provide_context=True,
-    dag=dag,
-)
-
-fetch_and_produce_gameweeks_task = PythonOperator(
-    task_id='fetch_and_produce_gameweeks',
-    python_callable=fetch_and_produce_gameweeks,
-    provide_context=True,
-    dag=dag,
-)
-
-fetch_and_produce_fixtures_task = PythonOperator(
-    task_id='fetch_and_produce_fixtures',
-    python_callable=fetch_and_produce_fixtures,
-    dag=dag,
-)
-
-fetch_and_produce_player_history_task = PythonOperator(
-    task_id='fetch_and_produce_player_history',
-    python_callable=fetch_and_produce_player_history,
-    provide_context=True,
-    dag=dag,
-)
-
-spark_job = SparkSubmitOperator(
-    task_id='spark_test_task',
-    application='/opt/airflow/fpl_functions/spark_script.py',  # Path to your Spark job
-    conn_id='spark_con',  # Ensure this connection ID is configured in Airflow
-    packages='org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0',  # Kafka package for Spark
-    application_args=["{{ti.xcom_pull(task_ids='fetch_and_produce_teams')}}"],  # Pass teams_data in JSON format
-    verbose=True,
-    dag=dag,
-)
-
-# Set task dependencies
-fetch_fpl_data_task >> [
-    fetch_and_produce_teams_task,
-    fetch_and_produce_players_task,
-    fetch_and_produce_gameweeks_task,
-    fetch_and_produce_fixtures_task
-] >> fetch_and_produce_player_history_task
-
-fetch_and_produce_teams_task >> spark_job
+    # Task 7: Transform events data using Spark
+    transform_events_task = SparkSubmitOperator(
+        task_id='transform_events_data',
+        application='/opt/airflow/fpl_functions/events_script.py',  # Path to your Spark events script
+        conn_id='spark_conn',  # Airflow Spark connection ID
+        packages='org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0',
+        application_args=["{{ ti.xcom_pull(task_ids='extract_and_load_events', key='events_data_json') }}"],  # Pass JSON string from XCom
+        dag=dag
+    )
+    # Define the order of tasks
+    fetch_fpl_data_task >> [extract_load_players_task, extract_load_teams_task, extract_load_events_task, extract_load_player_history_task]
+    extract_load_fixtures_task >> transform_teams_task
+    extract_load_fixtures_task >> transform_events_task

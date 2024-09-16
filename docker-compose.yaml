@@ -46,43 +46,6 @@ services :
       retries: 10
     networks:
       - bigdata-network
-
-######################################################
-# KAFKA
-######################################################
-  kafka:
-    image: docker.io/bitnami/kafka:latest
-    restart: always
-    container_name: kafka
-    hostname: kafka
-    ports:
-      - 9092:9092
-      - 9093:9093
-    environment:
-      - KAFKA_CFG_NODE_ID=0
-      - KAFKA_CFG_PROCESS_ROLES=controller,broker
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-    networks:
-      - bigdata-network
-
-
-  kafka-ui:
-    image: provectuslabs/kafka-ui:latest
-    container_name: kafka-ui
-    depends_on:
-      - kafka
-    ports:
-      - 8089:8080
-    environment:
-      KAFKA_CLUSTERS_0_NAME: kafka
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-      DYNAMIC_CONFIG_ENABLED: 'true'
-    networks:
-      - bigdata-network
-    restart: on-failure
 ######################################################
   # SPARK
 ######################################################
@@ -110,6 +73,7 @@ services :
       SPARK_WORKER_MEMORY: 1g # Adjust if needed
     networks:
       - bigdata-network
+
 ######################################################
 # NETWORK
 ######################################################
