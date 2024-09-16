@@ -1,12 +1,17 @@
+import pandas as pd
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col
-from pyspark.sql.types import StructType, StructField, IntegerType, StringType, BooleanType
+from pyspark.sql.functions import col
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, BooleanType*
+import sys
+# Add the path to your functions file (adjust if needed)
+sys.path.append('/opt/airflow/fpl_functions')
+from Functions import get_fpl_data, get_fixtures_data, get_players_history
 
-def main():
-    # Create Spark session
-    spark = SparkSession.builder.appName("KafkaToSpark").getOrCreate()
-
-    # Define the schema
+def transform_fpl_teams_data(pandas_df):
+    # Initialize Spark session
+    spark = SparkSession.builder.appName("FPL_Teams_Transformation").getOrCreate()
+    
+    # Define schema
     schema = StructType([
         StructField("code", IntegerType(), True),
         StructField("draw", IntegerType(), True),
@@ -31,27 +36,26 @@ def main():
         StructField("pulse_id", IntegerType(), True)
     ])
 
-    # Read data from Kafka
-    df = spark.readStream \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", "kafka:9092") \
-        .option("subscribe", "FPL_Teams") \
-        .load()
+    # Convert Pandas DataFrame to Spark DataFrame
+    spark_df = spark.createDataFrame(pandas_df, schema=schema)
 
-    # Transform data using schema
-    df = df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
-
-    # Select specific columns for display
-    df = df.select("name", "short_name", "strength_overall_home", "strength_overall_away")
-
-    # Write the stream to console with customized display
-    query = df.writeStream \
-        .format("console") \
-        .option("truncate", False) \
-        .outputMode("append") \
-        .start()
-
-    query.awaitTermination()
+    # Example transformation: Add a column for average strength
+    spark_df = spark_df.withColumn(
+        "average_strength", 
+        (col("strength_overall_home") + col("strength_overall_away")) / 2
+    )
+    
+    return spark_df
 
 if __name__ == "__main__":
-    main()
+    teams_data = get_fpl_data()['teams']
+    sui= json.dumps(teams_data, indent=4)
+    # Convert to Pandas DataFrame
+    pandas_df = pd.DataFrame(sui)
+    
+    # Transform the data
+    teams_data_df = transform_fpl_teams_data(pandas_df)
+
+
+    # Stop the Spark session
+    spark.stop()
