@@ -71,7 +71,7 @@ with DAG(
     def save_to_csv(**kwargs):
         for key in ['element_types_df', 'elements_df', 'teams_df', 'events_df', 'fixtures_df', 'history_df']:
             df = pd.DataFrame(kwargs['ti'].xcom_pull(task_ids='process_player_history', key=key))
-            df.to_csv(f"/path/to/your/airflow/dags/{key}.csv", index=False)
+            df.to_csv(f"/opt/airflow/dags/{key}.csv", index=False)
 
     fetch_bootstrap = PythonOperator(
         task_id='fetch_bootstrap_data',
