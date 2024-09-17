@@ -1,154 +1,135 @@
 from airflow import DAG
+from airflow.utils.task_group import TaskGroup
 from airflow.operators.python_operator import PythonOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.utils.dates import days_ago
 import pandas as pd
 import sys
-
+from datetime import timedelta
+import pandas as pd
 sys.path.append('/opt/airflow/fpl_functions')
-from Functions import get_fpl_data, get_fixtures_data, get_players_history
+from Functions import get_bootstrap_static_data, get_fixtures_data, get_player_history_data, FPLElementType, FPLElement, FPLTeam, FPLEvent, FPLFixture, FPLHistory
 
-def fetch_fpl_data(**kwargs):
-    """Fetches FPL data from the API and pushes it to XCom."""
-    data = get_fpl_data()
-    # Push the entire data to XCom
-    kwargs['ti'].xcom_push(key='fpl_data', value=data)
-    # Push player IDs to XCom for use in player history extraction
-    player_ids = [player['id'] for player in data['elements']]
-    kwargs['ti'].xcom_push(key='player_ids', value=player_ids)
-    return data
-
-def extract_and_load_players(**kwargs):
-    """Extracts player data from XCom."""
-    ti = kwargs['ti']
-    data = ti.xcom_pull(task_ids='fetch_fpl_data', key='fpl_data')
-    players_df = pd.DataFrame(data['elements'])  # Player data
-    return players_df
-
-def extract_and_load_teams(**kwargs):
-    """Extracts team data from XCom and pushes it as JSON to XCom."""
-    ti = kwargs['ti']
-    data = ti.xcom_pull(task_ids='fetch_fpl_data', key='fpl_data')
-    teams_df = pd.DataFrame(data['teams'])
-    
-    # Convert DataFrame to JSON string
-    teams_json = teams_df.to_json(orient='records')
-    
-    # Push JSON string to XCom
-    ti.xcom_push(key='teams_data_json', value=teams_json)
-    return teams_df
-
-def extract_and_load_events(**kwargs):
-    """Extracts gameweek data from XCom and pushes it as JSON to XCom."""
-    ti = kwargs['ti']
-    data = ti.xcom_pull(task_ids='fetch_fpl_data', key='fpl_data')
-    events_df = pd.DataFrame(data['events'])  # Gameweek data
-    
-    # Convert DataFrame to JSON string
-    events_json = events_df.to_json(orient='records')
-    
-    # Push JSON string to XCom
-    ti.xcom_push(key='events_data_json', value=events_json)
-    return events_df
-
-def extract_and_load_fixtures(**kwargs):
-    """Extracts fixtures data from the API."""
-    fixtures_data = get_fixtures_data()
-    fixtures_df = pd.DataFrame(fixtures_data)
-    return fixtures_df
-
-def extract_and_load_player_history(batch_size=50, **kwargs):
-    """Extracts player history data in chunks, using player IDs from XCom."""
-    ti = kwargs['ti']
-    player_ids = ti.xcom_pull(task_ids='fetch_fpl_data', key='player_ids')
-    all_player_history = []
-
-    for i in range(0, len(player_ids), batch_size):
-        batch_ids = player_ids[i:i + batch_size]
-        player_history = get_players_history(batch_ids)
-        all_player_history.extend(player_history)
-
-    history_df = pd.DataFrame(all_player_history)
-    return history_df
-
-# Default args for the Airflow DAG
 default_args = {
     'owner': 'airflow',
-    'start_date': days_ago(1),
     'retries': 1,
+    'retry_delay': timedelta(minutes=5),
 }
 
-# Define the Airflow DAG
 with DAG(
-    dag_id='fpl_data_pipeline',
+    'fpl_dag',
     default_args=default_args,
-    description='A DAG to extract and transform FPL data',
-    schedule_interval='@daily',  # Adjust frequency as needed
+    description='DAG for fetching and processing FPL data',
+    schedule_interval='@daily',  # Adjust as needed
+    start_date=days_ago(1),
     catchup=False,
 ) as dag:
 
-    # Task 1: Fetch FPL data
-    fetch_fpl_data_task = PythonOperator(
-        task_id='fetch_fpl_data',
-        python_callable=fetch_fpl_data,
+    def fetch_bootstrap_data(**kwargs):
+        data = get_bootstrap_static_data()
+        kwargs['ti'].xcom_push(key='bootstrap_data', value=data)
+
+    def process_element_types(**kwargs):
+        bootstrap_data = kwargs['ti'].xcom_pull(task_ids='fetch_bootstrap_data', key='bootstrap_data')
+        element_types_df = pd.concat([FPLElementType(item).to_dataframe() for item in bootstrap_data['element_types']], ignore_index=True)
+        kwargs['ti'].xcom_push(key='element_types_df', value=element_types_df.to_dict())
+
+    def process_elements(**kwargs):
+        bootstrap_data = kwargs['ti'].xcom_pull(task_ids='fetch_bootstrap_data', key='bootstrap_data')
+        elements_df = pd.concat([FPLElement(item).to_dataframe() for item in bootstrap_data['elements']], ignore_index=True)
+        kwargs['ti'].xcom_push(key='elements_df', value=elements_df.to_dict())
+
+    def process_teams(**kwargs):
+        bootstrap_data = kwargs['ti'].xcom_pull(task_ids='fetch_bootstrap_data', key='bootstrap_data')
+        teams_df = pd.concat([FPLTeam(item).to_dataframe() for item in bootstrap_data['teams']], ignore_index=True)
+        kwargs['ti'].xcom_push(key='teams_df', value=teams_df.to_dict())
+
+    def process_events(**kwargs):
+        bootstrap_data = kwargs['ti'].xcom_pull(task_ids='fetch_bootstrap_data', key='bootstrap_data')
+        events_df = pd.concat([FPLEvent(item).to_dataframe() for item in bootstrap_data['events']], ignore_index=True)
+        kwargs['ti'].xcom_push(key='events_df', value=events_df.to_dict())
+
+    def fetch_fixtures_data(**kwargs):
+        data = get_fixtures_data()
+        kwargs['ti'].xcom_push(key='fixtures_data', value=data)
+
+    def process_fixtures(**kwargs):
+        fixtures_data = kwargs['ti'].xcom_pull(task_ids='fetch_fixtures_data', key='fixtures_data')
+        fixtures_df = pd.concat([FPLFixture(item).to_dataframe() for item in fixtures_data], ignore_index=True)
+        kwargs['ti'].xcom_push(key='fixtures_df', value=fixtures_df.to_dict())
+
+    def process_player_history(**kwargs):
+        elements_df = pd.DataFrame(kwargs['ti'].xcom_pull(task_ids='process_elements', key='elements_df'))
+        player_ids = elements_df['id'].tolist()
+        all_player_history = []
+        for player_id in player_ids:
+            player_history = get_player_history_data(player_id)
+            all_player_history.extend([FPLHistory(item).to_dataframe() for item in player_history])
+        history_df = pd.concat(all_player_history, ignore_index=True)
+        kwargs['ti'].xcom_push(key='history_df', value=history_df.to_dict())
+
+    def save_to_csv(**kwargs):
+        for key in ['element_types_df', 'elements_df', 'teams_df', 'events_df', 'fixtures_df', 'history_df']:
+            df = pd.DataFrame(kwargs['ti'].xcom_pull(task_ids='process_player_history', key=key))
+            df.to_csv(f"/path/to/your/airflow/dags/{key}.csv", index=False)
+
+    fetch_bootstrap = PythonOperator(
+        task_id='fetch_bootstrap_data',
+        python_callable=fetch_bootstrap_data,
         provide_context=True
     )
 
-    # Task 2: Extract player data
-    extract_load_players_task = PythonOperator(
-        task_id='extract_and_load_players',
-        python_callable=extract_and_load_players,
-        provide_context=True,
+    process_element_types_task = PythonOperator(
+        task_id='process_element_types',
+        python_callable=process_element_types,
+        provide_context=True
     )
 
-    # Task 3: Extract team data
-    extract_load_teams_task = PythonOperator(
-        task_id='extract_and_load_teams',
-        python_callable=extract_and_load_teams,
-        provide_context=True,
+    process_elements_task = PythonOperator(
+        task_id='process_elements',
+        python_callable=process_elements,
+        provide_context=True
     )
 
-    # Task 4: Extract events data
-    extract_load_events_task = PythonOperator(
-        task_id='extract_and_load_events',
-        python_callable=extract_and_load_events,
-        provide_context=True,
+    process_teams_task = PythonOperator(
+        task_id='process_teams',
+        python_callable=process_teams,
+        provide_context=True
     )
 
-    # Task 5: Extract fixtures data
-    extract_load_fixtures_task = PythonOperator(
-        task_id='extract_and_load_fixtures',
-        python_callable=extract_and_load_fixtures,
-        provide_context=True,
+    process_events_task = PythonOperator(
+        task_id='process_events',
+        python_callable=process_events,
+        provide_context=True
     )
 
-    # Task 6: Extract player history data
-    extract_load_player_history_task = PythonOperator(
-        task_id='extract_and_load_player_history',
-        python_callable=extract_and_load_player_history,
-        provide_context=True,
+    fetch_fixtures = PythonOperator(
+        task_id='fetch_fixtures_data',
+        python_callable=fetch_fixtures_data,
+        provide_context=True
     )
 
-    # Task 7: Transform teams data using Spark
-    transform_teams_task = SparkSubmitOperator(
-        task_id='transform_teams_data',
-        application='/opt/airflow/fpl_functions/teams_script.py',  # Path to your Spark script
-        conn_id='spark_conn',  # Airflow Spark connection ID
-        packages='org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0',
-        application_args=["{{ ti.xcom_pull(task_ids='extract_and_load_teams', key='teams_data_json') }}"],  # Pass JSON as argument
-        dag=dag
+    process_fixtures_task = PythonOperator(
+        task_id='process_fixtures',
+        python_callable=process_fixtures,
+        provide_context=True
     )
 
-    # Task 7: Transform events data using Spark
-    transform_events_task = SparkSubmitOperator(
-        task_id='transform_events_data',
-        application='/opt/airflow/fpl_functions/events_script.py',  # Path to your Spark events script
-        conn_id='spark_conn',  # Airflow Spark connection ID
-        packages='org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0',
-        application_args=["{{ ti.xcom_pull(task_ids='extract_and_load_events', key='events_data_json') }}"],  # Pass JSON string from XCom
-        dag=dag
+    process_player_history_task = PythonOperator(
+        task_id='process_player_history',
+        python_callable=process_player_history,
+        provide_context=True
     )
-    # Define the order of tasks
-    fetch_fpl_data_task >> [extract_load_players_task, extract_load_teams_task, extract_load_events_task, extract_load_player_history_task]
-    extract_load_fixtures_task >> transform_teams_task
-    extract_load_fixtures_task >> transform_events_task
+
+    save_csv = PythonOperator(
+        task_id='save_to_csv',
+        python_callable=save_to_csv,
+        provide_context=True
+    )
+
+    # Set task dependencies
+    fetch_bootstrap >> [process_element_types_task, process_elements_task, process_teams_task, process_events_task]
+    fetch_fixtures >> process_fixtures_task
+    process_elements_task >> process_player_history_task
+    process_fixtures_task >> process_player_history_task
+    process_player_history_task >> save_csv
