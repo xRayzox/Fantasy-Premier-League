@@ -9,7 +9,7 @@ ARG PYTHON_VERSION=3.9
 ENV AIRFLOW_HOME=/opt/airflow
 
 # Set environment variable for additional pip requirements
-ENV _PIP_ADDITIONAL_REQUIREMENTS="confluent-kafka[avro] kafka-python pyspark pandas"
+ENV _PIP_ADDITIONAL_REQUIREMENTS="confluent-kafka[avro] kafka-python pyspark pandas praw boto3 configparser psycopg2-binary apache-airflow-providers-docker"
 
 # Install dependencies and subpackages
 RUN pip install --upgrade pip

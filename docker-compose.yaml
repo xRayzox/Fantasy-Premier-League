@@ -37,6 +37,7 @@ services :
       - ./mnt/airflow/logs:/opt/airflow/spark
       - ./mnt/airflow/plugins:/opt/airflow/plugins
       - ./FPL:/opt/airflow/fpl_functions
+      - ./dbt_fpl:/opt/airflow/dbt
     ports:
       - 8080:8080
     healthcheck:
@@ -46,34 +47,18 @@ services :
       retries: 10
     networks:
       - bigdata-network
-######################################################
-  # SPARK
-######################################################
-  spark-master:
-    image: bitnami/spark:latest
+
+  docker-proxy:
+    image: alpine/socat
+    command: "TCP4-LISTEN:2375,fork,reuseaddr UNIX-CONNECT:/var/run/docker.sock"
     ports:
-      - "8081:8080"  # Spark Master UI
-      - "7077:7077"  # Spark Master port
-    environment:
-      SPARK_MODE: master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-      SPARK_SSL_ENABLED: "no"
+      - "2376:2375"
+    volumes:
+      - //var/run/docker.sock:/var/run/docker.sock
+      - ./dbt_fpl:/datadrive/dbt/dbt_fpl
+      - ~/.dbt:/home/dbtuser/.dbt
     networks:
       - bigdata-network
-
-  spark-worker:
-    image: bitnami/spark:latest
-    depends_on:
-      - spark-master
-    environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 1g # Adjust if needed
-    networks:
-      - bigdata-network
-
 ######################################################
 # NETWORK
 ######################################################

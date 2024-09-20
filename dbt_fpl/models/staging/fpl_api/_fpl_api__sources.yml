@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: fpl_api
+    database: dev  
+    schema: raw 
+    tables:
+      - name: teams
+      - name: players
+      - name: fixtures
+      - name: gameweek
+      - name: my_team
+      - name: my_team_transfers

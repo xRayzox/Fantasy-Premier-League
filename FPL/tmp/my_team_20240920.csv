@@ -1,0 +1,5 @@
+id,gameweek,points,total_points,rank,rank_sort,overall_rank,bank,value,event_transfers,event_transfers_cost,points_on_bench
+1,1,72,72,1072219,1140390,1072220,0,1000,0,0,8
+2,2,80,152,2449203,2486866,876895,0,1001,1,0,5
+3,3,80,232,1555514,1582355,635899,9,1002,1,0,6
+4,4,63,295,1740258,1772643,323863,9,1001,0,0,10

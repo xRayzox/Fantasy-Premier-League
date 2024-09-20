@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: stg_fpl_api__teams
+    description: This table has basic information about premier league teams
+
+  - name: stg_fpl_api__players
+    description: This table has information about premier league players
+
+  - name: stg_fpl_api__gameweek
+    description: This table has information about premier league gameweeks
+
+  - name: stg_fpl_api__fixtures
+    description: This table has information about premier league fixtures
+
+  - name: stg_fpl_api__my_team
+    description: This table has information about my FPL team
+
+  - name: stg_fpl_api__my_team_transfers
+    description: This table has information about my FPL team transfers

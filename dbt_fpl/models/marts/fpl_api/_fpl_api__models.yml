@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: gameweek_info
+    description: Provides gameweek info for current, previous and next gameweek
+
+  - name: fixture_run
+    description: Provides info for upcoming fixtures in each gameweek per team
+
+  - name: my_team
+    description: Provides info on performance of my FPL team until current gameweek
+
+  - name: my_team_transfers
+    description: Provides info on all transfers made in my FPL team
+
+  - name: difficulty
+    description: Displays Fixtures per team per gameweek along with difficulty
+
+  - name: key_players
+    description: Top 3 players per team based on total points

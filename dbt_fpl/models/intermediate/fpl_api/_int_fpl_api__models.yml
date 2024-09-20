@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: int_fixtures_teams_joined
+    description: Replaces fixtures table columns with teams ids to show player team_name by joining on teams table
+
+  - name: int_fixtures_teams_narrow_joined
+    description: Makes fixtures table narrow by listing out fixtures for each team and then replace team id with team name
+
+  - name: int_gameweek_players_joined
+    description: Replaces gameweek table columns with player ids to show player web_name by joining on players table
+
+  - name: int_fixture_id_pivot
+    description: Pivot fixtures table to have gameweek as columns and opponents as data values.
+
+  - name: int_fixture_pivot
+    description: Drops any null columns from int_fixture_id_pivot
+
+  - name: int_players_top_ranked
+    description: Top 3 players per team based on ranking on total points
