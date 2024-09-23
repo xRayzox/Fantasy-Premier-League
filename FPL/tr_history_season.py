@@ -13,8 +13,8 @@ def transform_previous_season():
     spark = SparkSession.builder \
         .appName("FPL Previous Season Data Transformation") \
         .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
-        .config("spark.hadoop.fs.s3a.access.key", "ZAritWM0fgdiJNpV9VIj") \
-        .config("spark.hadoop.fs.s3a.secret.key", "FBaOdH4ICewnDOZoLo0vGr39YUQMjkv4CdVIyjEA") \
+        .config("spark.hadoop.fs.s3a.access.key", "PUAF7tOevViDzWE2oR5C") \
+        .config("spark.hadoop.fs.s3a.secret.key", "Ui9Ro0scL8MJgGVgzy1QAo3RXXYHj2ms2SQ4UmRi") \
         .config("spark.hadoop.fs.s3a.path.style.access", "true") \
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
         .getOrCreate()

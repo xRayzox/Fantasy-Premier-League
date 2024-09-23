@@ -15,8 +15,8 @@ from Functions import load_fixture, load_fpl, load_player_history
 
 # MinIO configuration
 MINIO_HOST = 'minio:9000'
-MINIO_ACCESS_KEY = 'ZAritWM0fgdiJNpV9VIj'
-MINIO_SECRET_KEY = 'FBaOdH4ICewnDOZoLo0vGr39YUQMjkv4CdVIyjEA'
+MINIO_ACCESS_KEY = 'PUAF7tOevViDzWE2oR5C'
+MINIO_SECRET_KEY = 'Ui9Ro0scL8MJgGVgzy1QAo3RXXYHj2ms2SQ4UmRi'
 BUCKET_NAME = 'fpl'
 
 # Initialize MinIO client
