@@ -9,7 +9,7 @@ ARG PYTHON_VERSION=3.9
 ENV AIRFLOW_HOME=/opt/airflow
 
 # Set environment variable for additional pip requirements
-ENV _PIP_ADDITIONAL_REQUIREMENTS="confluent-kafka[avro] kafka-python pyspark pandas praw boto3 configparser psycopg2-binary apache-airflow-providers-docker apache-airflow-providers-apache-spark"
+ENV _PIP_ADDITIONAL_REQUIREMENTS="confluent-kafka[avro]"
 
 # Install dependencies and subpackages
 RUN pip install --upgrade pip
@@ -34,9 +34,6 @@ USER airflow
 RUN pip install --no-cache-dir "apache-airflow[postgres,aws,kafka,celery,spark]==${AIRFLOW_VERSION}" \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
     ${_PIP_ADDITIONAL_REQUIREMENTS}
-
-# Install DBT for PostgreSQL
-RUN pip install dbt-postgres
 
 # Expose the webserver and scheduler ports
 EXPOSE 8080 8793 5555

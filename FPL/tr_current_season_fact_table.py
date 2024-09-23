@@ -1,15 +1,26 @@
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.types import *
-import logging
+import datetime
 
-import os
+# Get current date and time
+now = datetime.datetime.now()
 
-def transform(input_path):
-    spark = SparkSession.builder.appName('FPLDataTransformation') \
-    .config("spark.sql.files.tmpDir", "/tmp/spark-tmp") \
-    .config("spark.sql.warehouse.dir", "/opt/airflow/spark-warehouse") \
-    .getOrCreate()
-    # Define the schema for the DataFrame
+# Format the date and time as YYYY-MM-DD_HH-MM-SS for safe filename
+formatted_datetime = now.strftime("%Y-%m-%d_%H-%M-%S")
+
+def transform():
+    spark = SparkSession.builder \
+        .appName("FPL Data Transformation") \
+        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
+        .config("spark.hadoop.fs.s3a.access.key", "ZAritWM0fgdiJNpV9VIj") \
+        .config("spark.hadoop.fs.s3a.secret.key", "FBaOdH4ICewnDOZoLo0vGr39YUQMjkv4CdVIyjEA") \
+        .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+        .getOrCreate()
+
+    input_path = "s3a://fpl/data/current_season.csv"
+    
+    # Define schema
     schema = StructType([
         StructField("element", StringType(), False),
         StructField("fixture", StringType(), False),
@@ -49,10 +60,10 @@ def transform(input_path):
         StructField("transfers_out", IntegerType(), False)
     ])
 
-    # Read the CSV file into a DataFrame with the defined schema
+    # Read the CSV file into a DataFrame
     spark_df = spark.read.csv(input_path, schema=schema, header=True)
 
-    # Example transformations
+    # Perform transformations
     spark_df = spark_df.withColumn('kickoff_time', F.to_timestamp(spark_df.kickoff_time))
 
     float_columns = ['bps', 'influence', 'creativity', 'threat', 'ict_index']
@@ -63,13 +74,17 @@ def transform(input_path):
                        .withColumnRenamed('round', 'GW') \
                        .withColumnRenamed('value', 'price') \
                        .withColumnRenamed('minutes', 'minutes_played')
-    
 
-    return spark_df
+    # PostgreSQL connection properties
+    jdbc_url = "jdbc:postgresql://postgres:5432/airflow_db"  # Replace <host>, <port>, <database>
+    properties = {
+        "user": "airflow",  # Your PostgreSQL username
+        "password": "airflow",  # Your PostgreSQL password
+        "driver": "org.postgresql.Driver"  # Driver is specified here for clarity, but Spark handles this.
+    }
 
-
+    # Write the DataFrame to PostgreSQL
+    spark_df.write.jdbc(url=jdbc_url, table="Fact_table", mode="overwrite", properties=properties)
 
 if __name__ == "__main__":
-    import sys
-    input_path = sys.argv[1]  # Pass input path via CLI argument
-    transform(input_path)
+    transform()

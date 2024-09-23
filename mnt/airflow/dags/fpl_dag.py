@@ -1,16 +1,31 @@
 from airflow import DAG
-from airflow.operators.python_operator import PythonOperator
+from airflow.operators.python import PythonOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.utils.dates import days_ago
 from airflow.operators.postgres_operator import PostgresOperator
 import sys
 import pandas as pd
+import boto3
 
 # Ensure the correct path is appended for importing custom functions
 sys.path.append('/opt/airflow/fpl_functions')
 
 # Import functions from the external file Functions.py
 from Functions import load_fixture, load_fpl, load_player_history
+
+# MinIO configuration
+MINIO_HOST = 'minio:9000'
+MINIO_ACCESS_KEY = 'ZAritWM0fgdiJNpV9VIj'
+MINIO_SECRET_KEY = 'FBaOdH4ICewnDOZoLo0vGr39YUQMjkv4CdVIyjEA'
+BUCKET_NAME = 'fpl'
+
+# Initialize MinIO client
+minio_client = boto3.client(
+    's3',
+    endpoint_url=f'http://{MINIO_HOST}',
+    aws_access_key_id=MINIO_ACCESS_KEY,
+    aws_secret_access_key=MINIO_SECRET_KEY,
+)
 
 default_args = {
     'owner': 'wael',
@@ -158,18 +173,25 @@ create_tables_task = PostgresOperator(
     dag=dag,
 )
 
-# Task to load fixture data
-load_fixture_task = PythonOperator(
-    task_id='load_fixture',
-    python_callable=load_fixture,
-    dag=dag,
-)
-
 # Task to load FPL static data and push it to XCom for other tasks
 def load_fpl_task_callable(**kwargs):
     players_df, teams_df, positions_of_players_df, gameweeks_df = load_fpl()
-    # Push players_df to XCom so it can be used in the next task
     kwargs['ti'].xcom_push(key='players_df', value=players_df)
+    players_path = '/opt/airflow/fpl_functions/fpl_extract/players.csv'
+    teams_path = '/opt/airflow/fpl_functions/fpl_extract/teams.csv'
+    positions_of_players_path = '/opt/airflow/fpl_functions/fpl_extract/positions_of_players.csv'
+    gameweeks_path = '/opt/airflow/fpl_functions/fpl_extract/gameweeks.csv'
+    players_df.to_csv(players_path, index=False)
+    teams_df.to_csv(teams_path, index=False)
+    positions_of_players_df.to_csv(positions_of_players_path, index=False)
+    gameweeks_df.to_csv(gameweeks_path, index=False)
+    # Upload CSVs to MinIO
+    minio_client.upload_file(players_path, BUCKET_NAME, 'data/players.csv')
+    minio_client.upload_file(teams_path, BUCKET_NAME, 'data/teams.csv')
+    minio_client.upload_file(positions_of_players_path, BUCKET_NAME, 'data/positions.csv')
+    minio_client.upload_file(gameweeks_path, BUCKET_NAME, 'data/gameweeks.csv')
+
+    
 
 load_fpl_task = PythonOperator(
     task_id='load_fpl',
@@ -187,17 +209,18 @@ def players_statistics(**kwargs):
     current_season_df, previous_seasons_df = load_player_history(players_df)
     
     # Save current_season_df to CSV
-    current_season_path = '/opt/airflow/fpl_functions/current_season.csv'
+    current_season_path = '/opt/airflow/fpl_functions/fpl_extract/current_season.csv'
+    previous_seasons_path = '/opt/airflow/fpl_functions/fpl_extract/previous_seasons.csv'
+
     current_season_df.to_csv(current_season_path, index=False)
-    
-    # Save previous_seasons_df to CSV
-    previous_seasons_path = '/opt/airflow/fpl_functions/previous_seasons.csv'
     previous_seasons_df.to_csv(previous_seasons_path, index=False)
     
-    # Push paths to XCom
-    kwargs['ti'].xcom_push(key='current_season_csv', value=current_season_path)
-    kwargs['ti'].xcom_push(key='previous_seasons_csv', value=previous_seasons_path)
+
+    # Upload CSVs to MinIO
+    minio_client.upload_file(current_season_path, BUCKET_NAME, 'data/current_season.csv')
+    minio_client.upload_file(previous_seasons_path, BUCKET_NAME, 'data/previous_seasons.csv')
     
+
     return current_season_df, previous_seasons_df
 
 load_players_statistics = PythonOperator(
@@ -208,39 +231,54 @@ load_players_statistics = PythonOperator(
 )
 
 # Task to transform data
-spark_transform_task = SparkSubmitOperator(
+spark_transform_current_task = SparkSubmitOperator(
     task_id='transform_fpl_data',
-    application='/opt/airflow/fpl_functions/tr_current_season_fact_table.py',  # Path to your PySpark script
+    application='/opt/airflow/fpl_functions/tr_current_season_fact_table.py',
+    packages='org.apache.hadoop:hadoop-aws:3.3.1,org.postgresql:postgresql:42.7.4',
     conn_id='spark_default',  # Spark connection in Airflow
-    application_args=['{{ ti.xcom_pull(task_ids="load_players_statistics", key="current_season_csv") }}'],
     dag=dag,
 )
-# Task to insert data into PostgreSQL
-insert_fact_table_task = PostgresOperator(
-    task_id='insert_fact_table',
-    postgres_conn_id='postgres_default',  # Your Airflow connection ID
-    sql="""
-        INSERT INTO fact_table (element, fixture, opponent_team, total_points, was_home, kickoff_time, team_h_score,
-        team_a_score, GW, minutes_played, goals_scored, assists, clean_sheets, goals_conceded, own_goals,
-        penalties_saved, penalties_missed, yellow_cards, red_cards, saves, bonus, bps, influence, creativity,
-        threat, ict_index, starts, expected_goals, expected_assists, expected_goal_involvements, expected_goals_conceded,
-        price, transfers_balance, selected, transfers_in, transfers_out)
-        SELECT * FROM (VALUES 
-        {{ ti.xcom_pull(task_ids='transform_fpl_data') | json_query }} 
-        ) AS temp (element, fixture, opponent_team, total_points, was_home, kickoff_time, team_h_score,
-        team_a_score, GW, minutes_played, goals_scored, assists, clean_sheets, goals_conceded, own_goals,
-        penalties_saved, penalties_missed, yellow_cards, red_cards, saves, bonus, bps, influence, creativity,
-        threat, ict_index, starts, expected_goals, expected_assists, expected_goal_involvements, expected_goals_conceded,
-        price, transfers_balance, selected, transfers_in, transfers_out)
-    """,
+spark_transform_previous_task = SparkSubmitOperator(
+    task_id='transform_previous_season_data',
+    application='/opt/airflow/fpl_functions/tr_history_season.py',  # Path to your previous season script
+    packages='org.apache.hadoop:hadoop-aws:3.3.1,org.postgresql:postgresql:42.7.4',
+    conn_id='spark_default',  # Spark connection in Airflow
     dag=dag,
 )
-
+spark_transform_gameweeks_task = SparkSubmitOperator(
+    task_id='transform_gameweeks_data',
+    application='/opt/airflow/fpl_functions/tr_gameweeks_data.py',  # Path to the script
+    packages='org.apache.hadoop:hadoop-aws:3.3.1,org.postgresql:postgresql:42.7.4',
+    conn_id='spark_default',  # Spark connection in Airflow
+    dag=dag,
+)
+spark_transform_position_task = SparkSubmitOperator(
+    task_id='transform_positions_data',
+    application='/opt/airflow/fpl_functions/tr_position.py',  # Path to the position transformation script
+    packages='org.apache.hadoop:hadoop-aws:3.3.1,org.postgresql:postgresql:42.7.4',
+    conn_id='spark_default',  # Spark connection in Airflow
+    dag=dag,
+)
+spark_transform_teams_task = SparkSubmitOperator(
+    task_id='transform_teams_data',
+    application='/opt/airflow/fpl_functions/tr_teams.py',  # Path to the team transformation script
+    packages='org.apache.hadoop:hadoop-aws:3.3.1,org.postgresql:postgresql:42.7.4',
+    conn_id='spark_default',  # Spark connection in Airflow
+    dag=dag,
+)
+spark_transform_players_task = SparkSubmitOperator(
+    task_id='transform_players_data',
+    application='/opt/airflow/fpl_functions/tr_players.py',  # Path to the player transformation script
+    packages='org.apache.hadoop:hadoop-aws:3.3.1,org.postgresql:postgresql:42.7.4',
+    conn_id='spark_default',  # Spark connection in Airflow
+    dag=dag,
+)
 ######################################################
 # Task dependencies
 ######################################################
 
 # Define task dependencies
-create_tables_task
-load_fpl_task >> load_players_statistics >> spark_transform_task >>insert_fact_table_task
-load_fixture_task
+create_tables_task >> load_fpl_task
+load_fpl_task >> [load_players_statistics,spark_transform_players_task,spark_transform_gameweeks_task,spark_transform_position_task,spark_transform_teams_task] 
+load_players_statistics >> [spark_transform_current_task, spark_transform_previous_task]
+

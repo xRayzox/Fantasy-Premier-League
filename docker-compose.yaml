@@ -1,5 +1,5 @@
-services : 
-######################################################
+services:
+  ######################################################
 # DATABASE SERVICE
 ######################################################
   postgres:
@@ -47,9 +47,10 @@ services :
     networks:
       - bigdata-network
 
-######################################################
+
+  ######################################################
   # SPARK
-######################################################
+  ######################################################
   spark-master:
     image: bitnami/spark:latest
     ports:
@@ -71,12 +72,34 @@ services :
     environment:
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 2g # Adjust if needed
+      SPARK_WORKER_MEMORY: 2g  # Adjust if needed
     networks:
       - bigdata-network
+
+  ######################################################
+  # MinIO
+  ######################################################
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"  # MinIO server
+      - "9001:9001"  # MinIO console
+    volumes:
+      - minio_storage:/data
+    environment:
+      MINIO_ROOT_USER: FPL_DWH
+      MINIO_ROOT_PASSWORD: FPL_DWH_data
+    command: server --console-address ":9001" /data
+    networks:
+      - bigdata-network
+
 ######################################################
 # NETWORK
 ######################################################
 networks:
   bigdata-network:
-    driver : bridge
+    driver: bridge
+
+volumes:
+  minio_storage: {}
+  pgadmin-data:

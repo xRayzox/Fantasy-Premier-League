@@ -46,27 +46,22 @@ def fetch_summary(player_id):
 
 def load_player_history(df):
     """
-    Function to fetch current and previous season data for all players based on their IDs.
+    Function to fetch current and previous season data for all players based on their IDs in batches.
     """
     all_players_current = []
     all_players_previous = []
     
-    players_ids = df.id
-    extracted_players = 0
-    number_of_all_players = len(players_ids)
+    players_ids = df.id.to_list()
 
     for player_id in players_ids:
-        data = fetch_summary(player_id)
+        data = fetch_summary(player_id)  # Consider caching this data
         current_season = data.get('history', [])
         previous_seasons = data.get('history_past', [])
 
         all_players_current.extend(current_season)
         all_players_previous.extend(previous_seasons)
 
-        if extracted_players % 50 == 0:
-            print(f'Extracted {extracted_players}/{number_of_all_players}')
         
-        extracted_players += 1
 
     current_season_df = pd.DataFrame(all_players_current)
     previous_seasons_df = pd.DataFrame(all_players_previous)
