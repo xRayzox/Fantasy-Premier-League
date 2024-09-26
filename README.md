@@ -14,7 +14,7 @@ Using **Docker** to create a reproducible environment for running Spark, Airflow
 ### 2. 🗂️ Data Modeling
 Designing the data warehouse schema in PostgreSQL to efficiently store and manage processed FPL data.
 
-![Data Modeling](/Images/Data_Model.png)
+![Data Modeling](./images/data%20modeling.png)
 
 ### 3. 🔄 ETL Pipeline
 Building the ETL pipeline using **Apache Spark** and orchestrating it with **Airflow** to extract, transform, and load FPL data.
